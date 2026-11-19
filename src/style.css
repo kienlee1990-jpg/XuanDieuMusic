@@ -329,6 +329,10 @@ body{background-color:#b9cd77}
 .music-widget{width:100%;min-width:0;border:1px solid #d7dfcf;background:#fff}
 .music-widget-heading{height:48px;position:relative;display:flex;align-items:center;justify-content:center;background:#f1f9e8;border-bottom:3px solid #79cb2a}
 .music-widget-heading h2{margin:0;color:#1118dd;font:bold 21px Arial,sans-serif}
+.music-genre-filter{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 14px;font-size:13px;font-weight:700}
+.music-genre-filter select,.field-label select{min-height:36px;border:1px solid #d6dccc;border-radius:4px;background:#fff;padding:0 10px;color:#42453c;font:13px 'DM Sans',sans-serif;letter-spacing:0}
+.field-label select{width:100%}
+.legacy-panel a[aria-current="true"]{font-weight:700;text-decoration:underline}
 .music-upload-button{height:32px;padding:0 10px;border:1px solid #9ecf70;background:#fff;color:#477d20;display:inline-flex;align-items:center;justify-content:center;gap:7px;font:bold 11px Arial,sans-serif;cursor:pointer}
 .music-widget-heading>.music-upload-button{position:absolute;right:8px;top:7px}
 .sound-player{display:grid;grid-template-columns:minmax(180px,26%) minmax(0,1fr);min-height:298px;margin:0;padding:17px;background:#f6f6f6;border:1px solid #e3e3e3;border-radius:5px;gap:20px}

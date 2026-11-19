@@ -1,10 +1,14 @@
 import { api } from '../lib/supabase'
+import { parseTikTokLink, resolveTikTokLink } from '../lib/tiktok'
+import type { MusicGenre } from '../music/genres'
 
 const bucket = 'music'
-type SongRow = { id: number; title: string; artist: string; album: string; duration: string; audio_url: string | null; cover: string; is_active: boolean }
-const mapSong = (row: SongRow) => ({ id: row.id, title: row.title, artist: row.artist, album: row.album, duration: row.duration, audioUrl: row.audio_url, sourceType: sourceType(row.audio_url), cover: row.cover, isActive: row.is_active })
+type SongRow = { id: number; title: string; artist: string; album: string; duration: string; audio_url: string | null; genre: MusicGenre | null; cover: string; is_active: boolean }
+type SongInput = { title: string; artist: string; audioUrl: string; genre?: MusicGenre | null }
+const mapSong = (row: SongRow) => ({ id: row.id, title: row.title, artist: row.artist, album: row.album, duration: row.duration, audioUrl: row.audio_url, sourceType: sourceType(row.audio_url), genre: row.genre ?? null, cover: row.cover, isActive: row.is_active })
 function sourceType(value: string | null) {
   if (!value) return 'audio'
+  if (parseTikTokLink(value)) return 'tiktok'
   try {
     const host = new URL(value).hostname.toLowerCase()
     if (host.includes('soundcloud.com')) return 'soundcloud'
@@ -16,7 +20,7 @@ function sourceType(value: string | null) {
 }
 function providerDetails(url: string) {
   const kind = sourceType(url)
-  const provider = ({ soundcloud: 'SoundCloud', youtube: 'YouTube', spotify: 'Spotify', zingmp3: 'Zing MP3' } as Record<string, string>)[kind]
+  const provider = ({ soundcloud: 'SoundCloud', youtube: 'YouTube', spotify: 'Spotify', zingmp3: 'Zing MP3', tiktok: 'TikTok' } as Record<string, string>)[kind]
   return { kind, album: provider ? `Phát từ ${provider}` : 'Link âm thanh', cover: kind === 'soundcloud' ? '☁' : kind === 'youtube' ? '▶' : kind === 'audio' ? '🎧' : '♫' }
 }
 async function listSongs(all = false) {
@@ -28,25 +32,27 @@ async function listSongs(all = false) {
 }
 export async function getSongs() { return listSongs() }
 export async function getManagedSongs() { return (await listSongs(true)).filter(song => song.audioUrl) }
-export async function saveSong(input: { title: string; artist: string; audioUrl: string; duration?: string; cover?: string }) {
-  const details = providerDetails(input.audioUrl)
-  const { data, error } = await api().from('songs').insert({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', album: details.album, audio_url: input.audioUrl, cover: input.cover || details.cover, duration: input.duration || '--:--' }).select().single()
+export async function saveSong(input: SongInput & { duration?: string; cover?: string }) {
+  const audioUrl = await resolveTikTokLink(input.audioUrl)
+  const details = providerDetails(audioUrl)
+  const { data, error } = await api().from('songs').insert({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', album: details.album, audio_url: audioUrl, genre: input.genre, cover: input.cover || details.cover, duration: input.duration || '--:--' }).select().single()
   if (error) throw error
   return mapSong(data as SongRow)
 }
-export async function uploadSong(file: File, title: string, artist: string) {
+export async function uploadSong(file: File, title: string, artist: string, genre?: MusicGenre | null) {
   const client = api()
   const safeName = file.name.normalize('NFKD').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'audio'
   const path = `${crypto.randomUUID()}/${safeName}`
   const { error: uploadError } = await client.storage.from(bucket).upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false })
   if (uploadError) throw uploadError
   const { data } = client.storage.from(bucket).getPublicUrl(path)
-  try { return await saveSong({ title, artist, audioUrl: data.publicUrl }) }
+  try { return await saveSong({ title, artist, audioUrl: data.publicUrl, genre }) }
   catch (error) { await client.storage.from(bucket).remove([path]); throw error }
 }
-export async function updateSong(id: number, input: { title: string; artist: string; audioUrl: string }) {
-  const details = providerDetails(input.audioUrl)
-  const { data, error } = await api().from('songs').update({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', audio_url: input.audioUrl, album: details.album, cover: details.cover }).eq('id', id).select().single()
+export async function updateSong(id: number, input: SongInput) {
+  const audioUrl = await resolveTikTokLink(input.audioUrl)
+  const details = providerDetails(audioUrl)
+  const { data, error } = await api().from('songs').update({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', audio_url: audioUrl, genre: input.genre, album: details.album, cover: details.cover }).eq('id', id).select().single()
   if (error) throw error
   return mapSong(data as SongRow)
 }
