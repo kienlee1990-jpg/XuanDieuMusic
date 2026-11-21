@@ -330,6 +330,9 @@ body{background-color:#b9cd77}
 .music-widget-heading{height:48px;position:relative;display:flex;align-items:center;justify-content:center;background:#f1f9e8;border-bottom:3px solid #79cb2a}
 .music-widget-heading h2{margin:0;color:#1118dd;font:bold 21px Arial,sans-serif}
 .music-genre-filter{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 14px;font-size:13px;font-weight:700}
+.queued-embed-panels{position:relative}
+.queued-embed-panel.is-preloading{position:absolute;inset:0 0 auto;opacity:0;pointer-events:none}
+.music-next-button{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 9px;border:1px solid #d6dccc;border-radius:4px;background:#fff;color:#405235;font-size:13px}
 .music-genre-filter select,.field-label select{min-height:36px;border:1px solid #d6dccc;border-radius:4px;background:#fff;padding:0 10px;color:#42453c;font:13px 'DM Sans',sans-serif;letter-spacing:0}
 .field-label select{width:100%}
 .music-collection-switch{display:flex;flex-wrap:wrap;gap:6px;padding:10px 0}

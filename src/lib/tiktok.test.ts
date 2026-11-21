@@ -17,6 +17,15 @@ describe('TikTok post links', () => {
     expect(getTikTokEmbedUrl('https://www.tiktok.com/@creator/photo/7556599604297485580?share=1'))
       .toBe(getTikTokEmbedUrl(post))
     expect(parseTikTokLink('https://www.tiktok.com/@creator')).toEqual({ kind: 'unsupported' })
+    expect(parseTikTokLink('https://www.tiktok.com/@creator/photo/7556599604297485580')).toMatchObject({ isPhoto: true })
+    expect(parseTikTokLink(post)).toMatchObject({ isPhoto: false })
+  })
+
+  it('only starts the preloaded player muted', () => {
+    const active = new URL(getTikTokEmbedUrl(post))
+    const preloaded = new URL(getTikTokEmbedUrl(post, true))
+    expect(active.searchParams.get('muted')).toBeNull()
+    expect(preloaded.searchParams.get('muted')).toBe('1')
   })
 
   it('resolves a share redirect even when TikTok omits the account name', async () => {

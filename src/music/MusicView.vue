@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import WelcomeSlideshow from './components/WelcomeSlideshow.vue'
 import YouTubePlayer from './components/YouTubePlayer.vue'
 import TikTokPlayer from './components/TikTokPlayer.vue'
+import SoundCloudPlayer from './components/SoundCloudPlayer.vue'
+import SpotifyPlayer from './components/SpotifyPlayer.vue'
 import SongArtwork from './components/SongArtwork.vue'
 import { auth } from '../stores/auth'
 import { parseTikTokLink } from '../lib/tiktok'
@@ -50,12 +52,10 @@ const uploadError = ref('')
 const audio = ref(null)
 const toast = ref('')
 const isLoggingOut = ref(false)
-const isResolvingEmbed = ref(false)
-const soundcloudFrame = ref(null)
 const youtubePlayer = ref(null)
-const tiktokPlayer = ref(null)
-let soundcloudApiPromise = null
-let soundcloudWidget = null
+const revealQueuedYouTube = ref(false)
+const spotifyPlayer = ref(null)
+const queuedPlayers = new Map()
 let metadataTimer = null
 let metadataRequestId = 0
 let playbackRequest = 0
@@ -76,6 +76,16 @@ const visibleSongs = computed(() => {
     && (!needle || `${song.title} ${song.artist} ${song.album}`.toLocaleLowerCase('vi').includes(needle)),
   )
 })
+const nextQueuedSong = computed(() => {
+  const queue = visibleSongs.value
+  const index = queue.findIndex(song => song.id === activeSong.value?.id)
+  const next = queue[index + 1] ?? queue[0]
+  if (next && next.id !== activeSong.value?.id) return next
+})
+// Keep iframe DOM order stable when the preloaded player becomes active.
+const queuedEmbedSongs = computed(() => activeSong.value
+  ? [activeSong.value, nextQueuedSong.value].filter(song => ['tiktok', 'soundcloud'].includes(song?.sourceType)).sort((a, b) => a.id - b.id)
+  : [])
 const emptyListMessage = computed(() => {
   if (query.value.trim()) return 'Không tìm thấy bài hát phù hợp.'
   if (onlyKienMusic.value) return 'Chưa có bài phù hợp trong mục Nhạc của Kiên.'
@@ -94,8 +104,6 @@ function matchesMusicFilters(song) {
 function stopPlayback() {
   ++playbackRequest
   audio.value?.pause()
-  soundcloudWidget?.pause()
-  soundcloudWidget = null
   activeSong.value = null
   isPlaying.value = false
   currentTime.value = 0
@@ -197,13 +205,11 @@ async function loadPlaylists() {
   try { playlists.value = await getPlaylists() }
   catch (error) { playlists.value = []; showToast(error.message || 'Không tải được danh sách phát.') }
 }
-async function playSong(song) {
+async function playSong(song, { fromQueue = false } = {}) {
   if (!song?.audioUrl || !matchesMusicFilters(song)) return
-  if (activeSong.value?.id === song.id && song.sourceType === 'youtube' && youtubePlayer.value) { togglePlayback(); return }
-  if (activeSong.value?.id === song.id && song.sourceType === 'tiktok' && tiktokPlayer.value) { togglePlayback(); return }
-  if (activeSong.value?.id === song.id && song.sourceType === 'soundcloud' && soundcloudWidget) { soundcloudWidget.toggle(); return }
+  if (activeSong.value?.id === song.id && activeEmbedPlayer()) { togglePlayback(); return }
   ++playbackRequest
-  soundcloudWidget = null
+  revealQueuedYouTube.value = fromQueue && song.sourceType === 'youtube'
   activeSong.value = song
   isPlaying.value = false
   isLiked.value = false
@@ -212,10 +218,6 @@ async function playSong(song) {
     if (audio.value) { audio.value.pause(); audio.value.removeAttribute('src'); audio.value.load() }
     isPlaying.value = false
     duration.value = 0
-    if (song.sourceType === 'soundcloud' && new URL(song.audioUrl).hostname === 'on.soundcloud.com') {
-      isResolvingEmbed.value = true
-      isResolvingEmbed.value = false
-    }
     return
   }
   duration.value = 0
@@ -261,6 +263,13 @@ watch([activeSong, audio], ([song, player], _, onCleanup) => {
   })
 })
 
+function activeEmbedPlayer() {
+  const song = activeSong.value
+  if (song?.sourceType === 'youtube') return youtubePlayer.value
+  if (song?.sourceType === 'spotify') return spotifyPlayer.value
+  return queuedPlayers.get(song?.id)
+}
+
 function togglePlayback() {
   if (!activeSong.value) {
     if (visibleSongs.value.length) playSong(visibleSongs.value[0])
@@ -268,37 +277,28 @@ function togglePlayback() {
     return
   }
   if (!activeSong.value.audioUrl) { showToast('Bài hát này chưa có file âm thanh.'); return }
-  if (activeSong.value.sourceType === 'youtube') {
-    if (!youtubePlayer.value?.toggle()) showToast('Player YouTube đang tải, thử lại sau giây lát nhé.')
+  if (activeSong.value.sourceType && activeSong.value.sourceType !== 'audio') {
+    if (!activeEmbedPlayer()?.toggle()) showToast('Bấm nút phát trong khung để nghe.')
     return
   }
-  if (activeSong.value.sourceType === 'tiktok') {
-    if (!tiktokPlayer.value?.toggle()) showToast('Bấm nút phát trong khung TikTok.')
-    return
-  }
-  if (activeSong.value.sourceType === 'soundcloud') {
-    if (soundcloudWidget) soundcloudWidget.toggle()
-    else showToast('Player SoundCloud đang tải, thử lại sau giây lát nhé.')
-    return
-  }
-  if (activeSong.value.sourceType && activeSong.value.sourceType !== 'audio') { showToast('Dùng nút phát trong player nhúng nhé.'); return }
   if (audio.value?.paused) playCurrentAudio()
   else audio.value?.pause()
 }
 function nextSong() {
-  const queue = visibleSongs.value
-  const index = queue.findIndex(song => song.id === activeSong.value?.id)
-  const next = queue[index + 1] ?? queue[0]
-  if (next && next.id !== activeSong.value?.id) playSong(next)
+  playSong(nextQueuedSong.value, { fromQueue: true })
 }
 function handleEnded() {
-  if (isRepeating.value && activeSong.value?.sourceType === 'youtube') { youtubePlayer.value?.restart(); return }
-  if (isRepeating.value && audio.value) { audio.value.currentTime = 0; audio.value.play(); return }
+  isPlaying.value = false
+  if (isRepeating.value) {
+    const player = activeEmbedPlayer()
+    if (player) { player.restart(); return }
+    if (activeSong.value?.sourceType === 'audio' && audio.value) {
+      audio.value.currentTime = 0
+      playCurrentAudio()
+      return
+    }
+  }
   nextSong()
-}
-function handleTikTokEnded() {
-  if (isRepeating.value) tiktokPlayer.value?.restart()
-  else nextSong()
 }
 async function searchMusic() {
   if (!query.value.trim()) showToast(selectedGenre.value ? 'Đang hiển thị các bài trong thể loại đã chọn.' : 'Đang hiển thị tất cả bài hát có file.')
@@ -388,14 +388,10 @@ watch([audioLink, uploadMode, showUpload], ([url, mode, isOpen]) => {
 function externalEmbedUrl(song) {
   try {
     const url = new URL(song.audioUrl)
-    if (song.sourceType === 'soundcloud') {
-      const params = new URLSearchParams({ url: song.audioUrl, auto_play: 'true', visual: 'true', color: '6f9d4b', show_artwork: 'true' })
-      return `https://w.soundcloud.com/player/?${params.toString()}`
-    }
     if (song.sourceType === 'youtube') {
       const segments = url.pathname.split('/').filter(Boolean)
       const id = url.hostname === 'youtu.be' ? segments[0] : url.searchParams.get('v') || segments[segments.findIndex(part => ['embed', 'shorts', 'live', 'v'].includes(part)) + 1]
-      const params = new URLSearchParams({ autoplay: '1', rel: '0', playsinline: '1', enablejsapi: '1', origin: window.location.origin })
+      const params = new URLSearchParams({ autoplay: '0', rel: '0', playsinline: '1', enablejsapi: '1', origin: window.location.origin })
       return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?${params}`
     }
     if (song.sourceType === 'spotify') {
@@ -410,49 +406,6 @@ function externalEmbedUrl(song) {
   } catch { return '' }
   return ''
 }
-function loadSoundcloudWidgetApi() {
-  if (window.SC?.Widget) return Promise.resolve(window.SC)
-  if (soundcloudApiPromise) return soundcloudApiPromise
-  soundcloudApiPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'https://w.soundcloud.com/player/api.js'
-    script.onload = () => window.SC?.Widget ? resolve(window.SC) : reject(new Error('SoundCloud Widget API chưa sẵn sàng'))
-    script.onerror = () => reject(new Error('Không tải được SoundCloud Widget API'))
-    document.head.appendChild(script)
-  })
-  return soundcloudApiPromise
-}
-watch(() => [activeSong.value?.id, activeSong.value?.audioUrl, isResolvingEmbed.value], async () => {
-  const song = activeSong.value
-  if (!song || song.sourceType !== 'soundcloud' || isResolvingEmbed.value) return
-  const songId = song.id
-  await nextTick()
-  try {
-    const SC = await loadSoundcloudWidgetApi()
-    if (activeSong.value?.id !== songId || !soundcloudFrame.value) return
-    const widget = SC.Widget(soundcloudFrame.value)
-    soundcloudWidget = widget
-    widget.bind(SC.Widget.Events.READY, () => {
-      if (activeSong.value?.id !== songId) return
-      widget.getDuration(milliseconds => {
-        if (activeSong.value?.id !== songId || !Number.isFinite(milliseconds) || milliseconds <= 0) return
-        const time = formatTime(milliseconds / 1000)
-        const currentSong = songs.value.find(item => item.id === songId)
-        if (currentSong) currentSong.duration = time
-        if (activeSong.value?.id === songId) duration.value = milliseconds / 1000
-      })
-      widget.bind(SC.Widget.Events.PLAY, () => { if (activeSong.value?.id === songId) isPlaying.value = true })
-      widget.bind(SC.Widget.Events.PAUSE, () => { if (activeSong.value?.id === songId) isPlaying.value = false })
-      widget.bind(SC.Widget.Events.FINISH, () => {
-        if (activeSong.value?.id !== songId) return
-        isPlaying.value = false
-        if (isRepeating.value) { widget.seekTo(0); widget.play() }
-        else nextSong()
-      })
-      widget.isPaused(paused => { if (activeSong.value?.id === songId) isPlaying.value = !paused })
-    })
-  } catch { /* SoundCloud iframe still plays normally if its optional status API is unavailable. */ }
-})
 function showToast(message) { toast.value = message; window.setTimeout(() => { toast.value = '' }, 2600) }
 function setSeek(event) { if (!duration.value) return; const bounds = event.currentTarget.getBoundingClientRect(); const next = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) * duration.value; currentTime.value = next; if (audio.value && activeSong.value?.audioUrl) audio.value.currentTime = next }
 function handleLoadedMetadata() {
@@ -460,8 +413,8 @@ function handleLoadedMetadata() {
   duration.value = audio.value.duration
   if (activeSong.value) activeSong.value.duration = formatTime(audio.value.duration)
 }
-function updateYouTubeDuration(seconds) {
-  if (activeSong.value?.sourceType !== 'youtube') return
+function updateEmbedDuration(seconds) {
+  if (!activeSong.value) return
   duration.value = seconds
   activeSong.value.duration = formatTime(seconds)
   const song = songs.value.find(item => item.id === activeSong.value.id)
@@ -543,33 +496,42 @@ onMounted(async () => {
                 <option value="">Tất cả thể loại</option>
                 <option v-for="genre in musicGenres" :key="genre.value" :value="genre.value">{{ genre.label }}</option>
               </select>
+              <button v-if="activeSong && nextQueuedSong" type="button" class="music-next-button" @click="nextSong">
+                <SkipForward :size="16" aria-hidden="true" /> Bài tiếp theo
+              </button>
             </div>
-            <div v-if="activeSong?.sourceType === 'tiktok'" class="soundcloud-panel">
-              <TikTokPlayer :key="`${activeSong.id}:${activeSong.audioUrl}`" ref="tiktokPlayer"
-                :url="activeSong.audioUrl" :title="activeSong.title"
-                @playing="isPlaying = $event" @ended="handleTikTokEnded" />
+            <div v-if="queuedEmbedSongs.length" class="queued-embed-panels">
+              <div v-for="song in queuedEmbedSongs" :key="`${song.id}:${song.audioUrl}`"
+                class="soundcloud-panel queued-embed-panel" :class="{ 'is-preloading': song.id !== activeSong?.id }"
+                :inert="song.id !== activeSong?.id" :aria-hidden="song.id !== activeSong?.id || undefined">
+                <component :is="song.sourceType === 'tiktok' ? TikTokPlayer : SoundCloudPlayer"
+                  :ref="player => player ? queuedPlayers.set(song.id, player) : queuedPlayers.delete(song.id)"
+                  :url="song.audioUrl" :title="song.title" :active="song.id === activeSong?.id"
+                  @playing="song.id === activeSong?.id && (isPlaying = $event)"
+                  @duration="song.id === activeSong?.id && updateEmbedDuration($event)"
+                  @ended="song.id === activeSong?.id && handleEnded()" />
+              </div>
             </div>
-            <div v-else-if="activeSong && activeSong.sourceType && activeSong.sourceType !== 'audio'" class="soundcloud-panel">
-              <div v-if="isResolvingEmbed" class="embed-loading">Đang mở liên kết SoundCloud...</div>
-              <YouTubePlayer v-else-if="activeSong.sourceType === 'youtube'" :key="`${activeSong.id}:${activeSong.audioUrl}`" ref="youtubePlayer"
+            <div v-if="activeSong && ['youtube', 'spotify', 'zingmp3'].includes(activeSong.sourceType)" class="soundcloud-panel">
+              <YouTubePlayer v-if="activeSong.sourceType === 'youtube'" :key="`${activeSong.id}:${activeSong.audioUrl}`" ref="youtubePlayer"
                 :src="externalEmbedUrl(activeSong)" :title="`${activeSong.artist} - ${activeSong.title}`"
-                @playing="isPlaying = $event" @duration="updateYouTubeDuration" @time="currentTime = $event"
+                :reveal-on-mount="revealQueuedYouTube"
+                @playing="isPlaying = $event" @duration="updateEmbedDuration" @time="currentTime = $event"
                 @ended="handleEnded" @error="showToast" />
-              <iframe v-else :key="`${activeSong.id}:${activeSong.audioUrl}`" ref="soundcloudFrame" class="soundcloud-embed" :src="externalEmbedUrl(activeSong)" :title="`${activeSong.artist} - ${activeSong.title}`" allow="autoplay; encrypted-media; clipboard-write; fullscreen; picture-in-picture" loading="lazy"></iframe>
+              <SpotifyPlayer v-else-if="activeSong.sourceType === 'spotify'" :key="`${activeSong.id}:${activeSong.audioUrl}`" ref="spotifyPlayer"
+                :url="activeSong.audioUrl" :fallback-url="externalEmbedUrl(activeSong)" :title="activeSong.title"
+                @playing="isPlaying = $event" @duration="updateEmbedDuration" @ended="handleEnded" />
+              <iframe v-else :key="`${activeSong.id}:${activeSong.audioUrl}`" class="soundcloud-embed" :src="externalEmbedUrl(activeSong)" :title="`${activeSong.artist} - ${activeSong.title}`" allow="autoplay; encrypted-media; clipboard-write; fullscreen; picture-in-picture"></iframe>
               <div v-if="activeSong.sourceType === 'youtube'" class="youtube-playback-status">
-                <span>{{ isPlaying ? 'Đang phát' : 'Đã tạm dừng / chờ phát' }}</span>
+                <span>{{ isPlaying ? 'Đang phát' : currentTime > 0 ? 'Đã tạm dừng' : 'YouTube chờ phát khi khung hiển thị' }}</span>
                 <span>{{ formatTime(currentTime) }} / {{ duration > 0 ? formatTime(duration) : '--:--' }}</span>
               </div>
-              <p v-if="activeSong.sourceType !== 'youtube'">
-                Player {{ activeSong.sourceType === 'soundcloud' ? 'SoundCloud' : activeSong.sourceType === 'spotify' ? 'Spotify' : 'Zing MP3' }} ·
-                <template v-if="activeSong.sourceType === 'zingmp3'">
-                  Bấm nút phát trong khung.
-                  <a class="provider-fallback" :href="activeSong.audioUrl" target="_blank" rel="noopener noreferrer">Mở bài gốc trên Zing MP3</a>
-                </template>
-                <template v-else>Link đã lưu trong Supabase</template>
+              <p v-if="activeSong.sourceType === 'zingmp3'">
+                Bấm nút phát trong khung<span v-if="nextQueuedSong"> và dùng Bài tiếp theo khi nghe xong</span>.
+                <a class="provider-fallback" :href="activeSong.audioUrl" target="_blank" rel="noopener noreferrer">Mở bài gốc trên Zing MP3</a>
               </p>
             </div>
-            <div v-else-if="activeSong" :class="['sound-player',{playing:isPlaying}]">
+            <div v-else-if="activeSong?.sourceType === 'audio'" :class="['sound-player',{playing:isPlaying}]">
               <div class="sound-cover" :class="`sound-cover-${Math.max(0,currentIndex)%6}`"><span>{{ activeSong.cover || '♫' }}</span><small>GIAI ĐIỆU THANH XUÂN</small></div>
               <div class="sound-main">
                 <div class="sound-head">
@@ -585,7 +547,7 @@ onMounted(async () => {
                 <div class="sound-credits"><span><AudioLines :size="15"/> ĐANG PHÁT</span><span>{{ activeSong.album }}</span></div>
               </div>
             </div>
-            <div v-else class="music-empty">
+            <div v-else-if="!activeSong" class="music-empty">
               <div class="empty-music-icon"><Music2 :size="29"/></div>
               <h3>{{ selectedGenre || onlyKienMusic ? 'Chưa có bài đang phát' : 'Thư viện đang chờ giai điệu của bạn' }}</h3>
               <p v-if="!selectedGenre && !onlyKienMusic">Tải file nhạc lên để lưu vào Supabase và bắt đầu nghe.</p>
@@ -609,7 +571,10 @@ onMounted(async () => {
               </div>
               <div v-else class="empty-list">{{ emptyListMessage }}</div>
             </section>
-            <audio ref="audio" @timeupdate="currentTime = audio?.currentTime || 0" @loadedmetadata="handleLoadedMetadata" @play="isPlaying = true" @pause="isPlaying = false" @ended="handleEnded" />
+            <audio ref="audio" @timeupdate="currentTime = audio?.currentTime || 0" @loadedmetadata="handleLoadedMetadata"
+              @play="activeSong?.sourceType === 'audio' && (isPlaying = true)"
+              @pause="activeSong?.sourceType === 'audio' && (isPlaying = false)"
+              @ended="activeSong?.sourceType === 'audio' && handleEnded()" />
           </section>
 
         </div>

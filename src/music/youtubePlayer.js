@@ -35,6 +35,32 @@ export function connectYouTubePlayer(YT, frame, callbacks) {
   let ready = false
   let ended = false
   let timer
+  let autoplayPending = typeof IntersectionObserver === 'function'
+  let inView = false
+  const observer = autoplayPending ? new IntersectionObserver(([entry]) => {
+    inView = entry.intersectionRatio > 0.5
+    startAutoplay()
+  }, { threshold: [0, 0.5, 0.51, 1] }) : null
+
+  function stopAutoplay() {
+    autoplayPending = false
+    observer?.disconnect()
+    document.removeEventListener('visibilitychange', startAutoplay)
+  }
+
+  function startAutoplay() {
+    if (disposed || !ready || !autoplayPending || !inView || document.hidden) return
+    stopAutoplay()
+    player.playVideo()
+  }
+
+  function reportEnded() {
+    if (ended) return
+    ended = true
+    callbacks.playing(false)
+    callbacks.ended()
+  }
+
   function updateTime(player) {
     if (disposed) return
     const seconds = player.getDuration()
@@ -48,17 +74,21 @@ export function connectYouTubePlayer(YT, frame, callbacks) {
         if (disposed) return
         ready = true
         updateTime(event.target)
-        timer = setInterval(() => updateTime(event.target), 1000)
+        timer = setInterval(() => {
+          updateTime(event.target)
+          if (event.target.getPlayerState() === YT.PlayerState.ENDED) reportEnded()
+        }, 1000)
+        startAutoplay()
       },
       onStateChange(event) {
         if (disposed) return
-        updateTime(event.target)
-        callbacks.playing(event.data === YT.PlayerState.PLAYING)
-        if (event.data === YT.PlayerState.PLAYING) ended = false
-        if (event.data === YT.PlayerState.ENDED && !ended) {
-          ended = true
-          callbacks.ended()
+        if (event.data === YT.PlayerState.PLAYING) {
+          ended = false
+          stopAutoplay()
         }
+        updateTime(event.target)
+        if (event.data === YT.PlayerState.ENDED) reportEnded()
+        else callbacks.playing(event.data === YT.PlayerState.PLAYING)
       },
       onAutoplayBlocked() {
         if (disposed) return
@@ -72,9 +102,14 @@ export function connectYouTubePlayer(YT, frame, callbacks) {
       },
     },
   })
+  if (observer) {
+    observer.observe(frame)
+    document.addEventListener('visibilitychange', startAutoplay)
+  }
   return {
     toggle() {
       if (!ready || disposed) return false
+      stopAutoplay()
       if (player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo()
       else player.playVideo()
       return true
@@ -86,6 +121,7 @@ export function connectYouTubePlayer(YT, frame, callbacks) {
     },
     destroy() {
       disposed = true
+      stopAutoplay()
       clearInterval(timer)
       player.destroy()
     },

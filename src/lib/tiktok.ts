@@ -12,8 +12,8 @@ export function parseTikTokLink(value: string) {
 
   if (!url.username && !url.password && !url.port) {
     // Short links can redirect to /@/video/:id without including a username.
-    const post = url.pathname.match(/^\/(?:@[^/]*\/(?:video|photo)|player\/v1)\/(\d{15,25})\/?$/)
-    if (post && postHosts.includes(url.hostname)) return { kind: 'post', id: post[1] } as const
+    const post = url.pathname.match(/^\/(?:@[^/]*\/(video|photo)|player\/v1)\/(\d{15,25})\/?$/)
+    if (post && postHosts.includes(url.hostname)) return { kind: 'post', id: post[2], isPhoto: post[1] === 'photo' } as const
 
     const short = shortHosts.includes(url.hostname)
       ? url.pathname.match(/^\/([\w-]{1,64})\/?$/)
@@ -42,9 +42,9 @@ export async function resolveTikTokLink(value: string, signal?: AbortSignal): Pr
   throw new Error('Không mở được link TikTok rút gọn. Hãy thử dùng link đầy đủ của bài đăng.')
 }
 
-export function getTikTokEmbedUrl(value: string) {
+export function getTikTokEmbedUrl(value: string, preload = false) {
   const link = parseTikTokLink(value)
   return link?.kind === 'post'
-    ? `${tiktokOrigin}/player/v1/${link.id}?autoplay=1&music_info=1&rel=0&volume_control=0`
+    ? `${tiktokOrigin}/player/v1/${link.id}?autoplay=1&music_info=1&rel=0&volume_control=0&loop=0${preload ? '&muted=1' : ''}`
     : ''
 }
