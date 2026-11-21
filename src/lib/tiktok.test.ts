@@ -38,6 +38,25 @@ describe('TikTok post links', () => {
     expect(fetch).toHaveBeenCalledWith(short, expect.objectContaining({ redirect: 'manual' }))
   })
 
+  it('uses the first photo from the requested TikTok post when no cover is supplied', async () => {
+    const thumbnailUrl = 'https://p16-common-sign.tiktokcdn.com/photo.jpeg'
+    const itemStruct = {
+      id: '7556599604297485580',
+      video: { cover: 'https://p16-common-sign.tiktokcdn.com/video.jpeg' },
+      imagePost: { images: [{ imageURL: { urlList: [thumbnailUrl] } }] },
+    }
+    const data = { __DEFAULT_SCOPE__: { 'webapp.video-detail': { itemInfo: { itemStruct } } } }
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      `<script type="application/json" id="__UNIVERSAL_DATA_FOR_REHYDRATION__">${JSON.stringify(data)}</script>`,
+    ))
+    vi.stubGlobal('fetch', fetch)
+
+    const response = await resolver.fetch(new Request(`${request(post).url}&artwork=1`))
+
+    expect(await response.json()).toEqual({ thumbnailUrl })
+    expect(fetch).toHaveBeenCalledWith(post, expect.objectContaining({ redirect: 'error' }))
+  })
+
   it('rejects non-TikTok share targets without following them', async () => {
     const unrelated = 'https://vt.tiktok.com.example.com/ShareCode/'
     const fetch = vi.fn().mockResolvedValue(Response.redirect(unrelated))
