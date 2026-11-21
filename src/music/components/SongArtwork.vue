@@ -1,34 +1,27 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { parseTikTokLink, tiktokResolvePath } from '../../lib/tiktok'
+import { parseTikTokLink, tiktokOrigin, tiktokResolvePath } from '../../lib/tiktok'
 
 const props = defineProps({ song: { type: Object, required: true } })
 const artwork = ref('')
-const artworkElement = ref(null)
-const nearViewport = ref(false)
 const fallback = '/images/song-artwork.svg'
 // Share requests when a song appears more than once; URLs also invalidate
 // cached artwork naturally when a saved link changes.
 const cache = artworkCache
 let requestId = 0
-watch([artworkElement, () => props.song.audioUrl], ([element, value], _, onCleanup) => {
-  if (!element || nearViewport.value || !parseTikTokLink(value)) return
-  if (typeof IntersectionObserver !== 'function') {
-    nearViewport.value = true
-    return
+let tiktokArtworkUrl = ''
+function handleArtworkError() {
+  if (tiktokArtworkUrl && artwork.value === tiktokArtworkUrl) {
+    artwork.value = `${tiktokArtworkUrl}&retry=1`
+  } else if (artwork.value) {
+    artwork.value = ''
   }
-  const observer = new IntersectionObserver(([entry]) => {
-    if (!entry.isIntersecting) return
-    nearViewport.value = true
-    observer.disconnect()
-  }, { rootMargin: '200px' })
-  observer.observe(element)
-  onCleanup(() => observer.disconnect())
-})
+}
 
-watch(() => [props.song.audioUrl, props.song.cover, nearViewport.value], async () => {
+watch(() => [props.song.audioUrl, props.song.cover], async () => {
   const request = ++requestId
   artwork.value = ''
+  tiktokArtworkUrl = ''
   const cover = props.song.cover
   if (typeof cover === 'string' && (/^https:\/\//.test(cover) || /^\/(?!\/)/.test(cover))) {
     artwork.value = cover
@@ -45,17 +38,20 @@ watch(() => [props.song.audioUrl, props.song.cover, nearViewport.value], async (
       return
     }
     if (tiktok) {
-      if (tiktok.kind === 'unsupported' || !nearViewport.value) return
-    } else if (!['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com', 'on.soundcloud.com'].includes(host)) return
-    const key = tiktok?.kind === 'post' ? `tiktok:${tiktok.id}` : tiktok?.url || url.href
+      if (tiktok.kind === 'unsupported') return
+      const lookup = tiktok.kind === 'short' ? tiktok.url : `${tiktokOrigin}${url.pathname.replace(/\/$/, '')}`
+      tiktokArtworkUrl = `${tiktokResolvePath}?${new URLSearchParams({ artwork: 'image', url: lookup })}`
+      artwork.value = tiktokArtworkUrl
+      return
+    }
+    if (!['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com', 'on.soundcloud.com'].includes(host)) return
+    const key = url.href
     if (!cache.has(key)) {
-      const endpoint = tiktok
-        ? `${tiktokResolvePath}?${new URLSearchParams({ artwork: '1', url: tiktok.url || url.href })}`
-        : `https://soundcloud.com/oembed?${new URLSearchParams({ format: 'json', url: url.href })}`
+      const endpoint = `https://soundcloud.com/oembed?${new URLSearchParams({ format: 'json', url: url.href })}`
       const pending = fetch(endpoint, { signal: AbortSignal.timeout(8000) })
         .then(response => response.ok ? response.json() : null)
         .then(data => {
-          const coverUrl = tiktok ? data?.thumbnailUrl : data?.thumbnail_url
+          const coverUrl = data?.thumbnail_url
           return typeof coverUrl === 'string' && coverUrl.startsWith('https://') && !coverUrl.includes('/images/fb_placeholder.png') ? coverUrl : ''
         })
         .catch(() => { cache.delete(key); return '' })
@@ -72,8 +68,8 @@ const artworkCache = new Map()
 </script>
 
 <template>
-  <span ref="artworkElement" class="song-artwork">
-    <img :src="artwork || fallback" :alt="`Ảnh bìa ${song.title} — ${song.artist}`" loading="lazy" decoding="async" @error="artwork = ''" />
+  <span class="song-artwork">
+    <img :key="artwork || fallback" :src="artwork || fallback" :alt="`Ảnh bìa ${song.title} — ${song.artist}`" loading="lazy" decoding="async" @error="handleArtworkError" />
   </span>
 </template>
 

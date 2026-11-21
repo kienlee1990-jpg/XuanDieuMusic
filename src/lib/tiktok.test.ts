@@ -54,7 +54,24 @@ describe('TikTok post links', () => {
     const response = await resolver.fetch(new Request(`${request(post).url}&artwork=1`))
 
     expect(await response.json()).toEqual({ thumbnailUrl })
-    expect(fetch).toHaveBeenCalledWith(post, expect.objectContaining({ redirect: 'error' }))
+    expect(fetch).toHaveBeenCalledWith(post, expect.objectContaining({ redirect: 'manual' }))
+  })
+
+  it('serves TikTok image bytes from the artwork endpoint', async () => {
+    const cover = 'https://p16-common-sign.tiktokcdn.com/cover.jpeg'
+    const itemStruct = { id: '7556599604297485580', video: { cover } }
+    const data = { __DEFAULT_SCOPE__: { 'webapp.video-detail': { itemInfo: { itemStruct } } } }
+    const image = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(`<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">${JSON.stringify(data)}</script>`))
+      .mockResolvedValueOnce(new Response(image, { headers: { 'Content-Type': 'image/jpeg' } }))
+    vi.stubGlobal('fetch', fetch)
+
+    const response = await resolver.fetch(new Request(`${request(post).url}&artwork=image`))
+
+    expect(response.headers.get('content-type')).toBe('image/jpeg')
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(image)
+    expect(fetch.mock.calls[1][0].href).toBe(cover)
   })
 
   it('rejects non-TikTok share targets without following them', async () => {

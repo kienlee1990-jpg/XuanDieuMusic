@@ -9,8 +9,9 @@ const resolveTikTok: Connect.NextHandleFunction = async (request, response, next
 
   try {
     const result = await tiktokResolver.fetch(new Request(url, { method: request.method }))
+    const body = Buffer.from(await result.arrayBuffer())
     response.writeHead(result.status, Object.fromEntries(result.headers))
-    response.end(await result.text())
+    response.end(body)
   } catch (error) {
     next(error)
   }
