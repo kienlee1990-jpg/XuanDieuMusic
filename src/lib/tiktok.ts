@@ -45,6 +45,6 @@ export async function resolveTikTokLink(value: string, signal?: AbortSignal): Pr
 export function getTikTokEmbedUrl(value: string) {
   const link = parseTikTokLink(value)
   return link?.kind === 'post'
-    ? `${tiktokOrigin}/player/v1/${link.id}?autoplay=1&music_info=1&rel=0`
+    ? `${tiktokOrigin}/player/v1/${link.id}?autoplay=1&music_info=1&rel=0&volume_control=0`
     : ''
 }

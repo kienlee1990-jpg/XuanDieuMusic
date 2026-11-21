@@ -29,6 +29,7 @@ const isPlaying = ref(false)
 const isLiked = ref(false)
 const isRepeating = ref(false)
 const selectedGenre = ref('')
+const onlyKienMusic = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(72)
@@ -37,6 +38,7 @@ const selectedFile = ref(null)
 const uploadTitle = ref('')
 const uploadArtist = ref('')
 const uploadGenre = ref(null)
+const uploadIsKienMusic = ref(false)
 const uploadMode = ref('file')
 const audioLink = ref('')
 const metadataLoading = ref(false)
@@ -64,22 +66,29 @@ const shuffledSongs = computed(() => shuffleSongs(songs.value))
 const uploadButtonLabel = computed(() => {
   if (isUploading.value) return 'Đang xử lý...'
   const action = uploadMode.value === 'file' ? 'Tải lên' : 'Lưu link'
-  return matchesGenre({ genre: uploadGenre.value }) ? `${action} và phát` : action
+  return matchesMusicFilters({ genre: uploadGenre.value, isKienMusic: uploadIsKienMusic.value }) ? `${action} và phát` : action
 })
 const progress = computed(() => duration.value ? (currentTime.value / duration.value) * 100 : 0)
 const visibleSongs = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase('vi')
   return shuffledSongs.value.filter(song =>
-    song.audioUrl && matchesGenre(song)
+    song.audioUrl && matchesMusicFilters(song)
     && (!needle || `${song.title} ${song.artist} ${song.album}`.toLocaleLowerCase('vi').includes(needle)),
   )
+})
+const emptyListMessage = computed(() => {
+  if (query.value.trim()) return 'Không tìm thấy bài hát phù hợp.'
+  if (onlyKienMusic.value) return 'Chưa có bài phù hợp trong mục Nhạc của Kiên.'
+  if (selectedGenre.value) return 'Chưa có bài hát trong thể loại này.'
+  return 'Chưa có bài hát nào được lưu.'
 })
 const enabledSongCount = computed(() => managedSongs.value.filter(song => song.isActive).length)
 const stoppedSongCount = computed(() => managedSongs.value.length - enabledSongCount.value)
 const formatTime = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 
-function matchesGenre(song) {
-  return !selectedGenre.value || song.genre === selectedGenre.value
+function matchesMusicFilters(song) {
+  return (!selectedGenre.value || song.genre === selectedGenre.value)
+    && (!onlyKienMusic.value || song.isKienMusic)
 }
 
 function stopPlayback() {
@@ -96,6 +105,16 @@ function stopPlayback() {
 function selectGenre(genre) {
   if (genre === selectedGenre.value && activeSong.value) return
   selectedGenre.value = genre
+  playFirstVisibleSong()
+}
+
+function selectMusicCollection(kienOnly) {
+  if (onlyKienMusic.value === kienOnly) return
+  onlyKienMusic.value = kienOnly
+  playFirstVisibleSong()
+}
+
+function playFirstVisibleSong() {
   const firstSong = visibleSongs.value[0]
   if (firstSong && firstSong.id === activeSong.value?.id) return
   stopPlayback()
@@ -166,7 +185,7 @@ async function saveSongEdits() {
   isSavingEdit.value = true; editError.value = ''
   try {
     const song = editingSong.value
-    await editSongRecord(song.id, { title: song.title, artist: song.artist, audioUrl: song.audioUrl, genre: song.genre })
+    await editSongRecord(song.id, song)
     if (activeSong.value?.id === song.id) stopPlayback()
     showEditSong.value = false
     await Promise.all([loadManagedSongs(), loadSongs()])
@@ -179,11 +198,11 @@ async function loadPlaylists() {
   catch (error) { playlists.value = []; showToast(error.message || 'Không tải được danh sách phát.') }
 }
 async function playSong(song) {
-  if (!song?.audioUrl || !matchesGenre(song)) return
+  if (!song?.audioUrl || !matchesMusicFilters(song)) return
   if (activeSong.value?.id === song.id && song.sourceType === 'youtube' && youtubePlayer.value) { togglePlayback(); return }
   if (activeSong.value?.id === song.id && song.sourceType === 'tiktok' && tiktokPlayer.value) { togglePlayback(); return }
   if (activeSong.value?.id === song.id && song.sourceType === 'soundcloud' && soundcloudWidget) { soundcloudWidget.toggle(); return }
-  const request = ++playbackRequest
+  ++playbackRequest
   soundcloudWidget = null
   activeSong.value = song
   isPlaying.value = false
@@ -204,20 +223,48 @@ async function playSong(song) {
     audio.value.pause()
     audio.value.src = song.audioUrl
     audio.value.volume = volume.value / 100
-    try { await audio.value.play() }
-    catch {
-      if (request === playbackRequest) showToast('Không tự phát được bài này. Nhấn nút phát để thử lại.')
-    }
+    await playCurrentAudio('Không tự phát được bài này. Nhấn nút phát để thử lại.')
   } else {
     isPlaying.value = false
     showToast('Trình phát chưa sẵn sàng. Tải lại trang rồi thử lại nhé.')
   }
 }
+async function playCurrentAudio(message = 'Không phát được bài này.') {
+  const request = playbackRequest
+  try { await audio.value?.play() }
+  catch {
+    if (request === playbackRequest) showToast(message)
+  }
+}
+
+watch([activeSong, audio], ([song, player], _, onCleanup) => {
+  const session = navigator.mediaSession
+  if (!session || song?.sourceType !== 'audio' || !player) return
+  if (typeof MediaMetadata === 'function') {
+    session.metadata = new MediaMetadata({ title: song.title, artist: song.artist, album: song.album })
+  }
+  const actions = [
+    ['play', () => playCurrentAudio()],
+    ['pause', () => player.pause()],
+    ['nexttrack', nextSong],
+  ]
+  for (const [action, handler] of actions) {
+    try { session.setActionHandler(action, handler) }
+    catch { /* Action availability varies by browser and device. */ }
+  }
+  onCleanup(() => {
+    session.metadata = null
+    for (const [action] of actions) {
+      try { session.setActionHandler(action, null) }
+      catch { /* Unsupported actions did not register. */ }
+    }
+  })
+})
+
 function togglePlayback() {
   if (!activeSong.value) {
     if (visibleSongs.value.length) playSong(visibleSongs.value[0])
-    else if (query.value.trim()) showToast('Không tìm thấy bài hát phù hợp.')
-    else showToast(selectedGenre.value ? 'Thể loại này chưa có bài hát.' : 'Hãy tải một bài hát lên để bắt đầu nghe.')
+    else showToast(emptyListMessage.value)
     return
   }
   if (!activeSong.value.audioUrl) { showToast('Bài hát này chưa có file âm thanh.'); return }
@@ -226,7 +273,7 @@ function togglePlayback() {
     return
   }
   if (activeSong.value.sourceType === 'tiktok') {
-    if (!tiktokPlayer.value?.toggle()) showToast('Bấm nút phát trong khung TikTok hoặc mở bài gốc.')
+    if (!tiktokPlayer.value?.toggle()) showToast('Bấm nút phát trong khung TikTok.')
     return
   }
   if (activeSong.value.sourceType === 'soundcloud') {
@@ -235,12 +282,8 @@ function togglePlayback() {
     return
   }
   if (activeSong.value.sourceType && activeSong.value.sourceType !== 'audio') { showToast('Dùng nút phát trong player nhúng nhé.'); return }
-  if (audio.value?.paused) {
-    const request = playbackRequest
-    audio.value.play().catch(() => {
-      if (request === playbackRequest) showToast('Không phát được bài này.')
-    })
-  } else audio.value?.pause()
+  if (audio.value?.paused) playCurrentAudio()
+  else audio.value?.pause()
 }
 function nextSong() {
   const queue = visibleSongs.value
@@ -274,6 +317,7 @@ function finishAddingSong(song) {
   uploadTitle.value = ''
   uploadArtist.value = ''
   uploadGenre.value = null
+  uploadIsKienMusic.value = false
   audioLink.value = ''
   uploadMode.value = 'file'
 }
@@ -282,7 +326,12 @@ async function uploadSong() {
   if (!isAdmin.value) { uploadError.value = 'Chỉ quản trị viên mới có thể tải nhạc lên.'; return }
   isUploading.value = true; uploadError.value = ''
   try {
-    const song = await uploadSongFile(selectedFile.value, uploadTitle.value || selectedFile.value.name.replace(/\.[^.]+$/, ''), uploadArtist.value, uploadGenre.value)
+    const song = await uploadSongFile(selectedFile.value, {
+      title: uploadTitle.value || selectedFile.value.name.replace(/\.[^.]+$/, ''),
+      artist: uploadArtist.value,
+      genre: uploadGenre.value,
+      isKienMusic: uploadIsKienMusic.value,
+    })
     finishAddingSong(song)
     showToast('Đã tải nhạc lên Supabase Storage')
   } catch (error) { uploadError.value = error.message || 'Tải bài hát chưa thành công.' }
@@ -299,7 +348,7 @@ async function addSongLink() {
     const fallbackTitle = parseTikTokLink(url.href)
       ? 'Bài đăng TikTok'
       : url.pathname.split('/').filter(Boolean).at(-1)?.replace(/\.[^.]+$/, '') || 'Bài hát mới'
-    const song = await saveSong({ title: uploadTitle.value || fallbackTitle, artist: uploadArtist.value, audioUrl: url.href, genre: uploadGenre.value })
+    const song = await saveSong({ title: uploadTitle.value || fallbackTitle, artist: uploadArtist.value, audioUrl: url.href, genre: uploadGenre.value, isKienMusic: uploadIsKienMusic.value })
     finishAddingSong(song)
     showToast('Đã lưu link bài hát vào Supabase')
   } catch (error) { uploadError.value = error.message || 'Không thể thêm link này.' }
@@ -511,7 +560,14 @@ onMounted(async () => {
                 <span>{{ isPlaying ? 'Đang phát' : 'Đã tạm dừng / chờ phát' }}</span>
                 <span>{{ formatTime(currentTime) }} / {{ duration > 0 ? formatTime(duration) : '--:--' }}</span>
               </div>
-              <p>Player {{ activeSong.sourceType === 'soundcloud' ? 'SoundCloud' : activeSong.sourceType === 'youtube' ? 'YouTube' : activeSong.sourceType === 'spotify' ? 'Spotify' : 'Zing MP3' }} · <template v-if="activeSong.sourceType === 'zingmp3'">Bấm nút phát trong khung. <a class="provider-fallback" :href="activeSong.audioUrl" target="_blank" rel="noopener noreferrer">Mở bài gốc trên Zing MP3</a></template><template v-else>Link đã lưu trong Supabase</template></p>
+              <p v-if="activeSong.sourceType !== 'youtube'">
+                Player {{ activeSong.sourceType === 'soundcloud' ? 'SoundCloud' : activeSong.sourceType === 'spotify' ? 'Spotify' : 'Zing MP3' }} ·
+                <template v-if="activeSong.sourceType === 'zingmp3'">
+                  Bấm nút phát trong khung.
+                  <a class="provider-fallback" :href="activeSong.audioUrl" target="_blank" rel="noopener noreferrer">Mở bài gốc trên Zing MP3</a>
+                </template>
+                <template v-else>Link đã lưu trong Supabase</template>
+              </p>
             </div>
             <div v-else-if="activeSong" :class="['sound-player',{playing:isPlaying}]">
               <div class="sound-cover" :class="`sound-cover-${Math.max(0,currentIndex)%6}`"><span>{{ activeSong.cover || '♫' }}</span><small>GIAI ĐIỆU THANH XUÂN</small></div>
@@ -531,12 +587,16 @@ onMounted(async () => {
             </div>
             <div v-else class="music-empty">
               <div class="empty-music-icon"><Music2 :size="29"/></div>
-              <h3>{{ selectedGenre ? 'Thể loại này chưa có bài đang phát' : 'Thư viện đang chờ giai điệu của bạn' }}</h3>
-              <p v-if="!selectedGenre">Tải file nhạc lên để lưu vào Supabase và bắt đầu nghe.</p>
+              <h3>{{ selectedGenre || onlyKienMusic ? 'Chưa có bài đang phát' : 'Thư viện đang chờ giai điệu của bạn' }}</h3>
+              <p v-if="!selectedGenre && !onlyKienMusic">Tải file nhạc lên để lưu vào Supabase và bắt đầu nghe.</p>
               <button v-if="isAdmin" class="music-upload-button" @click="showUpload = true"><Upload :size="16"/> Chọn nhạc để tải lên</button>
             </div>
             <section id="music" class="music-library">
               <div class="music-library-heading"><div><span>THƯ VIỆN CỦA BẠN</span><h3>Danh sách bài hát <b>{{ visibleSongs.length }}</b></h3></div><span class="library-note"><i></i> Chỉ hiển thị bài đã có file</span></div>
+              <div class="music-collection-switch" role="group" aria-label="Danh mục nhạc">
+                <button type="button" :aria-pressed="!onlyKienMusic" @click="selectMusicCollection(false)">Tất cả bài hát</button>
+                <button type="button" :aria-pressed="onlyKienMusic" @click="selectMusicCollection(true)">Nhạc của Kiên</button>
+              </div>
               <div v-if="visibleSongs.length" class="music-list" tabindex="0" role="region" aria-label="Danh sách bài hát, cuộn để xem thêm">
                 <div v-for="(song,index) in visibleSongs" :key="song.id" :class="['music-list-row',{selected:activeSong?.id===song.id}]">
                   <span v-if="activeSong?.id===song.id && isPlaying" class="music-row-equalizer" role="img" aria-label="Đang phát"><i></i><i></i><i></i></span>
@@ -547,7 +607,7 @@ onMounted(async () => {
                   <button class="music-row-play" :aria-label="`${activeSong?.id===song.id && isPlaying ? 'Tạm dừng' : 'Phát'} ${song.title}`" @click="playSong(song)"><Pause v-if="activeSong?.id===song.id && isPlaying" :size="17" fill="currentColor"/><Play v-else :size="17" fill="currentColor"/></button>
                 </div>
               </div>
-              <div v-else class="empty-list">{{ query.trim() ? 'Không tìm thấy bài hát phù hợp.' : selectedGenre ? 'Chưa có bài hát trong thể loại này.' : 'Chưa có bài hát nào được lưu.' }}</div>
+              <div v-else class="empty-list">{{ emptyListMessage }}</div>
             </section>
             <audio ref="audio" @timeupdate="currentTime = audio?.currentTime || 0" @loadedmetadata="handleLoadedMetadata" @play="isPlaying = true" @pause="isPlaying = false" @ended="handleEnded" />
           </section>
@@ -565,6 +625,7 @@ onMounted(async () => {
             <option v-for="genre in musicGenres" :key="genre.value" :value="genre.value">{{ genre.label }}</option>
           </select>
         </label>
+        <label class="music-collection-checkbox"><input v-model="uploadIsKienMusic" type="checkbox" /> Thêm vào Nhạc của Kiên</label>
         <p v-if="uploadError" class="upload-error">{{ uploadError }}</p><button class="submit-upload" :disabled="isUploading" @click="uploadMode==='file'?uploadSong():addSongLink()">{{ uploadButtonLabel }} <ChevronRight :size="16"/></button></div></div></Transition>
     <Transition><div v-if="showEditSong" class="modal-backdrop" @click.self="showEditSong=false"><div class="upload-modal edit-song-modal"><div class="modal-header"><div><span class="modal-eyebrow">CHỈNH SỬA THƯ VIỆN</span><h2>Sửa bài hát</h2></div><button class="icon-button" aria-label="Đóng" @click="showEditSong=false"><X :size="20"/></button></div><p class="modal-copy">Sửa tên, ca sĩ hoặc thay link phát nhạc. Link mới sẽ được kiểm tra trước khi lưu.</p><label class="field-label">TÊN BÀI HÁT<input v-model="editingSong.title" type="text" placeholder="Tên bài hát"/></label><label class="field-label">CA SĨ<input v-model="editingSong.artist" type="text" placeholder="Tên ca sĩ"/></label><label class="field-label">LINK PHÁT NHẠC<input v-model="editingSong.audioUrl" type="url" placeholder="Link SoundCloud, YouTube, TikTok, Spotify hoặc file nhạc"/><small class="link-help">Có thể thay link nguồn. File đã tải lên vẫn giữ đường dẫn cục bộ.</small></label>
         <label class="field-label">THỂ LOẠI NHẠC
@@ -573,6 +634,7 @@ onMounted(async () => {
             <option v-for="genre in musicGenres" :key="genre.value" :value="genre.value">{{ genre.label }}</option>
           </select>
         </label>
+        <label class="music-collection-checkbox"><input v-model="editingSong.isKienMusic" type="checkbox" /> Thêm vào Nhạc của Kiên</label>
         <p v-if="editError" class="upload-error">{{ editError }}</p><button class="submit-upload" :disabled="isSavingEdit" @click="saveSongEdits">{{ isSavingEdit ? 'Đang lưu...' : 'Lưu thay đổi' }} <ChevronRight :size="16"/></button></div></div></Transition>
     <Transition><div v-if="toast" class="toast"><span>♪</span>{{ toast }}</div></Transition>
   </div>

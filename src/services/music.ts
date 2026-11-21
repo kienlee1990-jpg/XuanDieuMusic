@@ -3,9 +3,10 @@ import { parseTikTokLink, resolveTikTokLink } from '../lib/tiktok'
 import type { MusicGenre } from '../music/genres'
 
 const bucket = 'music'
-type SongRow = { id: number; title: string; artist: string; album: string; duration: string; audio_url: string | null; genre: MusicGenre | null; cover: string; is_active: boolean }
-type SongInput = { title: string; artist: string; audioUrl: string; genre?: MusicGenre | null }
-const mapSong = (row: SongRow) => ({ id: row.id, title: row.title, artist: row.artist, album: row.album, duration: row.duration, audioUrl: row.audio_url, sourceType: sourceType(row.audio_url), genre: row.genre ?? null, cover: row.cover, isActive: row.is_active })
+type SongRow = { id: number; title: string; artist: string; album: string; duration: string; audio_url: string | null; genre: MusicGenre | null; cover: string; is_active: boolean; is_kien_music: boolean }
+type SongDetails = { title: string; artist: string; genre?: MusicGenre | null; isKienMusic?: boolean }
+type SongInput = SongDetails & { audioUrl: string }
+const mapSong = (row: SongRow) => ({ id: row.id, title: row.title, artist: row.artist, album: row.album, duration: row.duration, audioUrl: row.audio_url, sourceType: sourceType(row.audio_url), genre: row.genre ?? null, cover: row.cover, isActive: row.is_active, isKienMusic: row.is_kien_music ?? false })
 function sourceType(value: string | null) {
   if (!value) return 'audio'
   if (parseTikTokLink(value)) return 'tiktok'
@@ -35,24 +36,24 @@ export async function getManagedSongs() { return (await listSongs(true)).filter(
 export async function saveSong(input: SongInput & { duration?: string; cover?: string }) {
   const audioUrl = await resolveTikTokLink(input.audioUrl)
   const details = providerDetails(audioUrl)
-  const { data, error } = await api().from('songs').insert({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', album: details.album, audio_url: audioUrl, genre: input.genre, cover: input.cover || details.cover, duration: input.duration || '--:--' }).select().single()
+  const { data, error } = await api().from('songs').insert({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', album: details.album, audio_url: audioUrl, genre: input.genre, is_kien_music: input.isKienMusic, cover: input.cover || details.cover, duration: input.duration || '--:--' }).select().single()
   if (error) throw error
   return mapSong(data as SongRow)
 }
-export async function uploadSong(file: File, title: string, artist: string, genre?: MusicGenre | null) {
+export async function uploadSong(file: File, details: SongDetails) {
   const client = api()
   const safeName = file.name.normalize('NFKD').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'audio'
   const path = `${crypto.randomUUID()}/${safeName}`
   const { error: uploadError } = await client.storage.from(bucket).upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false })
   if (uploadError) throw uploadError
   const { data } = client.storage.from(bucket).getPublicUrl(path)
-  try { return await saveSong({ title, artist, audioUrl: data.publicUrl, genre }) }
+  try { return await saveSong({ ...details, audioUrl: data.publicUrl }) }
   catch (error) { await client.storage.from(bucket).remove([path]); throw error }
 }
 export async function updateSong(id: number, input: SongInput) {
   const audioUrl = await resolveTikTokLink(input.audioUrl)
   const details = providerDetails(audioUrl)
-  const { data, error } = await api().from('songs').update({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', audio_url: audioUrl, genre: input.genre, album: details.album, cover: details.cover }).eq('id', id).select().single()
+  const { data, error } = await api().from('songs').update({ title: input.title.trim(), artist: input.artist.trim() || 'Nghệ sĩ chưa rõ', audio_url: audioUrl, genre: input.genre, is_kien_music: input.isKienMusic, album: details.album, cover: details.cover }).eq('id', id).select().single()
   if (error) throw error
   return mapSong(data as SongRow)
 }

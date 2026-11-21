@@ -11,6 +11,7 @@ Chạy các migration theo thứ tự trong Supabase SQL Editor hoặc dùng `su
 1. `supabase/migrations/202611080001_accounts.sql`
 2. `supabase/migrations/202611080002_music_library.sql`
 3. `supabase/migrations/202611080003_song_genres.sql`
+4. `supabase/migrations/202611080004_kien_music.sql`
 
 Migration thứ hai tạo bảng `songs`, `playlists`, bucket Storage `music` (tối đa 30 MB) và chính sách RLS. Mọi người có thể nghe bài đang bật; chỉ hồ sơ có vai trò `admin` mới được ghi dữ liệu hoặc tải/xóa file. Các bài mẫu chỉ là thông tin minh họa, không có file âm thanh; đăng nhập admin rồi dùng **Tải nhạc lên** để thêm file có quyền sử dụng hoặc dán link nguồn.
 
@@ -40,7 +41,7 @@ Mở Supabase Dashboard → SQL Editor và chạy toàn bộ tệp:
 
 Các tệp trong `supabase/migrations/`, theo thứ tự tên:
 
-Migration đầu tạo bảng `profiles`, tự tạo hồ sơ cho tài khoản Auth mới và bật Row Level Security. Hai migration tiếp theo tạo thư viện nhạc, Storage và trường thể loại bài hát. Với dự án đã có thư viện, chỉ chạy migration thể loại nếu chưa áp dụng. Các bài cũ xuất hiện trong **Tất cả thể loại** và có thể được phân loại trong **Quản lý bài hát**.
+Migration đầu tạo bảng `profiles`, tự tạo hồ sơ cho tài khoản Auth mới và bật Row Level Security. Các migration tiếp theo tạo thư viện nhạc, Storage, trường thể loại và trường đánh dấu bài thuộc **Nhạc của Kiên**. Với dự án đã có thư viện, chỉ chạy migration còn thiếu. Admin có thể gán thể loại hoặc đưa bài cũ vào **Nhạc của Kiên** trong **Quản lý bài hát**.
 
 Nếu dùng Supabase CLI đã cài đặt:
 
